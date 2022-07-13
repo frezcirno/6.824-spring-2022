@@ -6,24 +6,52 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
-import "strconv"
+import (
+	"os"
+	"strconv"
+)
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
+type MapReduceError int
 
-type ExampleArgs struct {
-	X int
+func (e MapReduceError) Error() string {
+	return strconv.Itoa(int(e))
 }
 
-type ExampleReply struct {
-	Y int
+const (
+	MapReduceOk                       = MapReduceError(0)
+	ErrTaskNotFound    MapReduceError = iota
+	ErrUnmatchedWorker MapReduceError = iota
+	ErrRpcFailed       MapReduceError = iota
+	ErrTaskType        MapReduceError = iota
+)
+
+type GetTaskArgs struct {
+	Whoami uint64
+}
+
+type GetTaskReply struct {
+	Task Task
+}
+
+type SubmitTaskArgs struct {
+	Whoami  uint64
+	TaskId  uint64
+	Results []string
+}
+
+type SubmitTaskReply struct {
+	Err MapReduceError
+}
+
+type GetParamsArgs struct {
+	Key string
+}
+
+type GetParamsReply struct {
+	Value int
 }
 
 // Add your RPC definitions here.
-
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
