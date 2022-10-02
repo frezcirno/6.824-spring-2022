@@ -312,6 +312,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	}
 
 	rf.switchState(Follower)
+	rf.electionTimer.Reset(makeTimeout())
 
 	if args.LastIncludedIndex <= rf.commitIndex {
 		// rf.slog("receive IS idx %d term %d from %d[%d]...already commit\n", args.LastIncludedIndex, args.LastIncludedTerm, args.LeaderId, args.Term)
@@ -515,6 +516,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	rf.switchState(Follower)
+	rf.electionTimer.Reset(makeTimeout())
 	defer rf.persist()
 
 	if args.PrevLogIndex < rf.prevLogIndex() {
