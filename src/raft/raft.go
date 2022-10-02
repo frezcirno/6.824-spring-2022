@@ -209,6 +209,10 @@ func (rf *Raft) switchTerm(term int) {
 }
 
 func (rf *Raft) switchState(state uint8) {
+	if rf.state == state {
+		return
+	}
+	// rf.slog("switch state to %d\n", state)
 	rf.state = state
 	switch state {
 	case Follower:
@@ -606,6 +610,55 @@ func (rf *Raft) replicaByIS(i int, args *InstallSnapshotArgs) {
 	}
 }
 
+func heapDown(h []int, i int) {
+	for {
+		l := 2*i + 1
+		if l >= len(h) {
+			break
+		}
+		// find the smallest child
+		c := l
+		if r := l + 1; r < len(h) && h[r] < h[l] {
+			c = r
+		}
+		// swap with the smallest child if necessary
+		if h[i] <= h[c] {
+			break
+		}
+		h[i], h[c] = h[c], h[i]
+		i = c
+	}
+}
+
+func heapify(h []int) {
+	for i := len(h)/2 - 1; i >= 0; i-- {
+		heapDown(h, i)
+	}
+}
+
+// find the k-th largest element in the array
+func topK(nums []int, k int) int {
+	h := make([]int, k)
+	copy(h, nums[:k])
+	heapify(h)
+	for i := k; i < len(nums); i++ {
+		if nums[i] > h[0] {
+			h[0] = nums[i]
+			heapDown(h, 0)
+		}
+	}
+	return h[0]
+}
+
+func (rf *Raft) updateCommitIndex() {
+	commitIndex := topK(rf.matchIndex, (len(rf.peers)-1)/2)
+	if commitIndex > rf.commitIndex {
+		rf.commitIndex = commitIndex
+		// rf.slog("update commitIndex to %d\n", rf.commitIndex)
+		rf.commitCond.Signal()
+	}
+}
+
 func (rf *Raft) replicaByAE(i int, args *AppendEntriesArgs, nextIndex int) {
 	reply := &AppendEntriesReply{}
 	if rf.sendAppendEntries(i, args, reply) {
@@ -616,28 +669,7 @@ func (rf *Raft) replicaByAE(i int, args *AppendEntriesArgs, nextIndex int) {
 				rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
 				rf.nextIndex[i] = rf.matchIndex[i] + 1
 				// rf.slog("update %d matchIndex %d, nextIndex %d\n", i, rf.matchIndex[i], rf.nextIndex[i])
-				commitIndex := rf.commitIndex
-				for j := rf.commitIndex + 1; j <= rf.lastLogIndex(); j++ {
-					count := 1
-					for k := range rf.peers {
-						if k == rf.me {
-							continue
-						}
-						if rf.matchIndex[k] >= j {
-							count++
-						}
-					}
-					if count > len(rf.peers)/2 {
-						commitIndex = j
-					} else {
-						break
-					}
-				}
-				if commitIndex > rf.commitIndex {
-					rf.commitIndex = commitIndex
-					// rf.slog("update commitIndex to %d\n", rf.commitIndex)
-					rf.commitCond.Signal()
-				}
+				rf.updateCommitIndex()
 			} else if reply.Term > rf.currentTerm {
 				// rf.slog("change to follower because AE reply from %d[%d], term %d -> %d\n", i, reply.Term, rf.currentTerm, reply.Term)
 				rf.switchTerm(reply.Term)
