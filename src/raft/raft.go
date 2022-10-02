@@ -812,8 +812,8 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) startElection() {
-	rf.debug("start election for %d\n", rf.currentTerm+1)
 	rf.mu.Lock()
+	rf.debug("start election for %d\n", rf.currentTerm+1)
 	rf.currentTerm++
 	rf.votedFor = rf.me
 	rf.switchState(Candidate)
