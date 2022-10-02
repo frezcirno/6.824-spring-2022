@@ -356,6 +356,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 		rf.log = []LogEntry{{Term: lastIncludedTerm, Command: lastIncludedIndex}}
 	} else {
 		rf.log = rf.getLogFrom(lastIncludedIndex)
+		rf.log[0].Term = lastIncludedTerm
 		rf.log[0].Command = lastIncludedIndex
 	}
 
