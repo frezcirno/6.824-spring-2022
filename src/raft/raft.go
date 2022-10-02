@@ -69,7 +69,7 @@ type LogEntry struct {
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
+	mu        sync.RWMutex        // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
@@ -126,7 +126,13 @@ func slog_slice(from int, to int) string {
 	if from == to {
 		return ""
 	}
-	return fmt.Sprintf(" log[%d-%d]", from, to)
+	if from == to-1 {
+		return fmt.Sprintf(" log[%d]", from)
+	}
+	if from == to-2 {
+		return fmt.Sprintf(" log[%d,%d]", from, to-1)
+	}
+	return fmt.Sprintf(" log[%d-%d]", from, to-1)
 }
 
 func (rf *Raft) PrevLogIndex() int {
@@ -154,35 +160,45 @@ func (rf *Raft) LogCount() int {
 }
 
 func (rf *Raft) GetLog(index int) *LogEntry {
-	if index < rf.PrevLogIndex() || index > rf.LastLogIndex() {
-		rf.slog("GetLog %d...panic\n", index)
-		panic("")
-	}
+	// if index < rf.PrevLogIndex() || index > rf.LastLogIndex() {
+	// rf.slog("GetLog %d...panic\n", index)
+	// 	panic("")
+	// }
 	return &rf.log[index-rf.PrevLogIndex()]
 }
 
 func (rf *Raft) GetLogFrom(from int) []LogEntry {
-	if from < rf.FirstLogIndex() || from > rf.NextLogIndex() {
-		rf.slog("GetLogFrom %d...panic", from)
-		panic("")
-	}
+	// if from < rf.FirstLogIndex() || from > rf.NextLogIndex() {
+	// rf.slog("GetLogFrom %d...panic", from)
+	// 	panic("")
+	// }
 	return rf.log[from-rf.PrevLogIndex():]
 }
 
+func (rf *Raft) CopyLogFrom(from int) []LogEntry {
+	// if from < rf.FirstLogIndex() || from > rf.NextLogIndex() {
+	// rf.slog("CopyLogFrom %d...panic", from)
+	// 	panic("")
+	// }
+	res := make([]LogEntry, len(rf.log[from-rf.PrevLogIndex():]))
+	copy(res, rf.log[from-rf.PrevLogIndex():])
+	return res
+}
+
 func (rf *Raft) GetLogSlice(from int, to int) []LogEntry {
-	if from < rf.FirstLogIndex() || to > rf.NextLogIndex() {
-		rf.slog("GetLogSlice from %d to %d...panic", from, to)
-		panic("")
-	}
+	// if from < rf.FirstLogIndex() || to > rf.NextLogIndex() {
+	// rf.slog("GetLogSlice from %d to %d...panic", from, to)
+	// 	panic("")
+	// }
 	return rf.log[from-rf.PrevLogIndex() : to-rf.PrevLogIndex()]
 }
 
 func (rf *Raft) GetLogIndex(index int) int {
 	// local log index -> global log index
-	if index < 1 || index > rf.LogCount() {
-		rf.slog("GetLogIndex %d", index)
-		panic("")
-	}
+	// if index < 1 || index > rf.LogCount() {
+	// rf.slog("GetLogIndex %d", index)
+	// 	panic("")
+	// }
 	return rf.PrevLogIndex() + index
 }
 
@@ -249,8 +265,8 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.currentTerm = currentTerm
 	rf.votedFor = votedFor
 	rf.log = log
-	rf.lastApplied = rf.FirstLogIndex()
-	rf.commitIndex = rf.FirstLogIndex()
+	rf.lastApplied = rf.PrevLogIndex()
+	rf.commitIndex = rf.PrevLogIndex()
 }
 
 type InstallSnapshotArgs struct {
@@ -272,12 +288,12 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	reply.Term = rf.currentTerm
 
 	if args.Term < rf.currentTerm {
-		rf.slog("receive IS idx %d term %d from %d[%d]...outdated\n", args.LastIncludedIndex, args.LastIncludedTerm, args.LeaderId, args.Term)
+		// rf.slog("receive IS idx %d term %d from %d[%d]...outdated\n", args.LastIncludedIndex, args.LastIncludedTerm, args.LeaderId, args.Term)
 		return
 	}
 
 	if args.Term > rf.currentTerm {
-		rf.slog("change to follower because receive IS idx %d term %d from %d[%d], term %d -> %d\n", args.LastIncludedIndex, args.LastIncludedTerm, args.LeaderId, args.Term, rf.currentTerm, args.Term)
+		// rf.slog("change to follower because receive IS idx %d term %d from %d[%d], term %d -> %d\n", args.LastIncludedIndex, args.LastIncludedTerm, args.LeaderId, args.Term, rf.currentTerm, args.Term)
 		rf.SwitchTerm(args.Term)
 		rf.persist()
 	}
@@ -286,11 +302,10 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.postpone <- struct{}{}
 
 	if args.LastIncludedIndex <= rf.commitIndex {
-		rf.slog("receive IS idx %d term %d from %d[%d]...already commit\n", args.LastIncludedIndex, args.LastIncludedTerm, args.LeaderId, args.Term)
+		// rf.slog("receive IS idx %d term %d from %d[%d]...already commit\n", args.LastIncludedIndex, args.LastIncludedTerm, args.LeaderId, args.Term)
 		return
 	}
 
-	rf.slog("commit snapshot idx %d term %d from %d[%d]\n", args.LastIncludedIndex, args.LastIncludedTerm, args.LeaderId, args.Term)
 	go func() {
 		rf.applyCh <- ApplyMsg{
 			SnapshotValid: true,
@@ -298,6 +313,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 			SnapshotTerm:  args.LastIncludedTerm,
 			SnapshotIndex: args.LastIncludedIndex,
 		}
+		// rf.slog("commit snapshot idx %d term %d from %d[%d]\n", args.LastIncludedIndex, args.LastIncludedTerm, args.LeaderId, args.Term)
 	}()
 }
 
@@ -315,7 +331,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	defer rf.mu.Unlock()
 
 	if lastIncludedIndex <= rf.commitIndex {
-		rf.slog("CondInstallSnapshot idx %d term %d...already commit\n", lastIncludedIndex, lastIncludedTerm)
+		// rf.slog("CondInstallSnapshot idx %d term %d...failed, there are newer commits\n", lastIncludedIndex, lastIncludedTerm)
 		return false
 	}
 
@@ -330,7 +346,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	rf.lastApplied = lastIncludedIndex
 
 	rf.persistWithSnapshot(snapshot)
-	rf.slog("CondInstallSnapshot idx %d term %d...success\n", lastIncludedIndex, lastIncludedTerm)
+	// rf.slog("CondInstallSnapshot idx %d term %d...success\n", lastIncludedIndex, lastIncludedTerm)
 	return true
 }
 
@@ -340,11 +356,11 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
-	// rf.mu.Lock()
-	// defer rf.mu.Unlock()
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 	if index <= rf.PrevLogIndex() {
-		rf.slog("Snapshot at index %d...too small", index)
+		// rf.slog("Snapshot at index %d...too small", index)
 		return
 	}
 
@@ -352,7 +368,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.log[0].Command = index
 
 	rf.persistWithSnapshot(snapshot)
-	rf.slog("Snapshot at index %d...ok\n", index)
+	// rf.slog("Snapshot at index %d...ok\n", index)
 }
 
 // example RequestVote RPC arguments structure.
@@ -393,12 +409,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term < rf.currentTerm {
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
-		rf.slog("receive RV with idx %d term %d from %d[%d]...outdated\n", args.LastLogIndex, args.LastLogTerm, args.CandidateId, args.Term)
+		// rf.slog("receive RV with idx %d term %d from %d[%d]...outdated\n", args.LastLogIndex, args.LastLogTerm, args.CandidateId, args.Term)
 		return
 	}
 
 	if args.Term > rf.currentTerm {
-		rf.slog("change to follower because receive RV from %d[%d], term %d -> %d\n", args.CandidateId, args.Term, rf.currentTerm, args.Term)
+		// rf.slog("change to follower because receive RV from %d[%d], term %d -> %d\n", args.CandidateId, args.Term, rf.currentTerm, args.Term)
 		rf.SwitchTerm(args.Term)
 		rf.SwitchState(Follower)
 	}
@@ -406,18 +422,18 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if (rf.votedFor != -1 && rf.votedFor != args.CandidateId) || !rf.isUpToDate(args) {
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
-		if rf.votedFor != -1 && rf.votedFor != args.CandidateId {
-			rf.slog("receive RV with idx %d term %d from %d[%d]...reject, has voted to %d\n", args.LastLogIndex, args.LastLogTerm, args.CandidateId, args.Term, rf.votedFor)
-		} else {
-			rf.slog("receive RV with idx %d term %d from %d[%d]...reject, log too old\n", args.LastLogIndex, args.LastLogTerm, args.CandidateId, args.Term)
-		}
+		// if rf.votedFor != -1 && rf.votedFor != args.CandidateId {
+		// rf.slog("receive RV with idx %d term %d from %d[%d]...reject, has voted to %d\n", args.LastLogIndex, args.LastLogTerm, args.CandidateId, args.Term, rf.votedFor)
+		// } else {
+		// rf.slog("receive RV with idx %d term %d from %d[%d]...reject, log too old\n", args.LastLogIndex, args.LastLogTerm, args.CandidateId, args.Term)
+		// }
 		return
 	}
 
 	rf.votedFor = args.CandidateId
 	rf.postpone <- struct{}{}
 	rf.persist()
-	rf.slog("receive RV with idx %d term %d from %d[%d]...grant\n", args.LastLogIndex, args.LastLogTerm, args.CandidateId, args.Term)
+	// rf.slog("receive RV with idx %d term %d from %d[%d]...grant\n", args.LastLogIndex, args.LastLogTerm, args.CandidateId, args.Term)
 
 	reply.VoteGranted = true
 	reply.Term = rf.currentTerm
@@ -478,12 +494,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.Term < rf.currentTerm {
 		reply.Success = false
 		reply.Term = rf.currentTerm
-		rf.slog("receive AE with idx %d term %d%s from %d[%d]...outdated\n", args.PrevLogIndex, args.PrevLogTerm, slog_slice(args.PrevLogIndex+1, args.PrevLogIndex+1+len(args.Entries)), args.LeaderId, args.Term)
+		// rf.slog("receive AE with idx %d term %d%s from %d[%d]...outdated\n", args.PrevLogIndex, args.PrevLogTerm, slog_slice(args.PrevLogIndex+1, args.PrevLogIndex+1+len(args.Entries)), args.LeaderId, args.Term)
 		return
 	}
 
 	if args.Term > rf.currentTerm {
-		rf.slog("change to follower because receive AE from %d[%d], term %d -> %d\n", args.LeaderId, args.Term, rf.currentTerm, args.Term)
+		// rf.slog("change to follower because receive AE from %d[%d], term %d -> %d\n", args.LeaderId, args.Term, rf.currentTerm, args.Term)
 		rf.SwitchTerm(args.Term)
 	}
 
@@ -493,9 +509,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if args.PrevLogIndex < rf.PrevLogIndex() {
 		reply.Success = false
+		reply.Term = rf.currentTerm
 		reply.ConflictTerm = -1
 		reply.ConflictIndex = rf.NextLogIndex()
-		rf.slog("receive AE with idx %d term %d%s from %d[%d]...reject, log has been archived\n", args.PrevLogIndex, args.PrevLogTerm, slog_slice(args.PrevLogIndex+1, args.PrevLogIndex+1+len(args.Entries)), args.LeaderId, args.Term)
+		// rf.slog("receive AE with idx %d term %d%s from %d[%d]...reject, log has been archived\n", args.PrevLogIndex, args.PrevLogTerm, slog_slice(args.PrevLogIndex+1, args.PrevLogIndex+1+len(args.Entries)), args.LeaderId, args.Term)
 		return
 	}
 
@@ -508,7 +525,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			// entry that has the same term as the log entry at PrevLogIndex.
 			reply.ConflictTerm = -1
 			reply.ConflictIndex = rf.NextLogIndex()
-			rf.slog("receive AE with idx %d term %d%s from %d[%d]...log missing from index %d\n", args.PrevLogIndex, args.PrevLogTerm, slog_slice(args.PrevLogIndex+1, args.PrevLogIndex+1+len(args.Entries)), args.LeaderId, args.Term, reply.ConflictIndex)
+			// rf.slog("receive AE with idx %d term %d%s from %d[%d]...log missing from index %d\n", args.PrevLogIndex, args.PrevLogTerm, slog_slice(args.PrevLogIndex+1, args.PrevLogIndex+1+len(args.Entries)), args.LeaderId, args.Term, reply.ConflictIndex)
 		} else {
 			// We have the log entry, but the term doesn't match.
 			reply.ConflictTerm = rf.GetLogTerm(args.PrevLogIndex)
@@ -520,7 +537,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 					break
 				}
 			}
-			rf.slog("receive AE with idx %d term %d%s from %d[%d]...term dismatch, my term %d, matched index %d\n", args.PrevLogIndex, args.PrevLogTerm, slog_slice(args.PrevLogIndex+1, args.PrevLogIndex+1+len(args.Entries)), args.LeaderId, args.Term, reply.ConflictTerm, reply.ConflictIndex)
+			// rf.slog("receive AE with idx %d term %d%s from %d[%d]...term dismatch, my term %d, matched index %d\n", args.PrevLogIndex, args.PrevLogTerm, slog_slice(args.PrevLogIndex+1, args.PrevLogIndex+1+len(args.Entries)), args.LeaderId, args.Term, reply.ConflictTerm, reply.ConflictIndex)
 		}
 		return
 	}
@@ -536,13 +553,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		rf.log = append(rf.log, args.Entries[i:]...)
 	}
-	rf.slog("receive AE with idx %d term %d%s from %d[%d]...ok\n", args.PrevLogIndex, args.PrevLogTerm, slog_slice(args.PrevLogIndex+1, args.PrevLogIndex+1+len(args.Entries)), args.LeaderId, args.Term)
 
+	result := map[bool]string{false: "heartbeat, ok", true: "ok"}[len(args.Entries) > 0]
 	if rf.commitIndex < args.LeaderCommit {
+		oldCommitIndex := rf.commitIndex
 		rf.commitIndex = Min(args.LeaderCommit, rf.LastLogIndex())
-		rf.slog("update commitIndex to %d\n", rf.commitIndex)
+		result += fmt.Sprintf(", commit %d->%d", oldCommitIndex, rf.commitIndex)
 		rf.commitCond.Signal()
 	}
+
+	// rf.slog("receive AE with cmt %d term %d%s from %d[%d]...%s\n", args.LeaderCommit, args.PrevLogTerm, slog_slice(args.PrevLogIndex+1, args.PrevLogIndex+1+len(args.Entries)), args.LeaderId, args.Term, result)
 
 	reply.Success = true
 	reply.Term = rf.currentTerm
@@ -553,22 +573,15 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	return ok
 }
 
-func (rf *Raft) replicaByIS(i int) {
-	args := &InstallSnapshotArgs{
-		Term:              rf.currentTerm,
-		LeaderId:          rf.me,
-		LastIncludedIndex: rf.PrevLogIndex(),
-		LastIncludedTerm:  rf.PrevLogTerm(),
-		Data:              rf.persister.ReadSnapshot(),
-	}
+func (rf *Raft) replicaByIS(i int, args *InstallSnapshotArgs) {
 	reply := &InstallSnapshotReply{}
-	rf.slog("%d needed log has been archived, send IS...\n", i)
+	// rf.slog("%d needed log has been archived, send IS...\n", i)
 	if rf.sendInstallSnapshot(i, args, reply) {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		if rf.currentTerm == args.Term && rf.state == Leader {
 			if reply.Term > rf.currentTerm {
-				rf.slog("change to follower because IS reply from %d[%d], term %d -> %d\n", i, reply.Term, rf.currentTerm, reply.Term)
+				// rf.slog("change to follower because IS reply from %d[%d], term %d -> %d\n", i, reply.Term, rf.currentTerm, reply.Term)
 				rf.SwitchTerm(reply.Term)
 				rf.SwitchState(Follower)
 				rf.persist()
@@ -581,15 +594,7 @@ func (rf *Raft) replicaByIS(i int) {
 	}
 }
 
-func (rf *Raft) replicaByAE(i int, nextIndex int) {
-	args := &AppendEntriesArgs{
-		Term:         rf.currentTerm,
-		LeaderId:     rf.me,
-		PrevLogIndex: nextIndex - 1,
-		PrevLogTerm:  rf.GetLogTerm(nextIndex - 1),
-		Entries:      rf.GetLogFrom(nextIndex),
-		LeaderCommit: rf.commitIndex,
-	}
+func (rf *Raft) replicaByAE(i int, args *AppendEntriesArgs, nextIndex int) {
 	reply := &AppendEntriesReply{}
 	if rf.sendAppendEntries(i, args, reply) {
 		rf.mu.Lock()
@@ -618,11 +623,11 @@ func (rf *Raft) replicaByAE(i int, nextIndex int) {
 				}
 				if commitIndex > rf.commitIndex {
 					rf.commitIndex = commitIndex
-					rf.slog("update commitIndex to %d\n", rf.commitIndex)
+					// rf.slog("update commitIndex to %d\n", rf.commitIndex)
 					rf.commitCond.Signal()
 				}
 			} else if reply.Term > rf.currentTerm {
-				rf.slog("change to follower because AE reply from %d[%d], term %d -> %d\n", i, reply.Term, rf.currentTerm, reply.Term)
+				// rf.slog("change to follower because AE reply from %d[%d], term %d -> %d\n", i, reply.Term, rf.currentTerm, reply.Term)
 				rf.SwitchTerm(reply.Term)
 				rf.SwitchState(Follower)
 				rf.persist()
@@ -633,7 +638,7 @@ func (rf *Raft) replicaByAE(i int, nextIndex int) {
 					for j := args.PrevLogIndex; j >= firstLogIndex; j-- {
 						if rf.GetLog(j).Term == reply.ConflictTerm {
 							rf.nextIndex[i] = j + 1
-							rf.slog("update nextIndex[%d] to ConflictIndex %d\n", i, rf.nextIndex[i])
+							// rf.slog("update nextIndex[%d] to ConflictIndex %d\n", i, rf.nextIndex[i])
 							break
 						}
 					}
@@ -644,14 +649,33 @@ func (rf *Raft) replicaByAE(i int, nextIndex int) {
 }
 
 func (rf *Raft) replicateTo(i int) {
+	rf.mu.RLock()
 	if rf.state != Leader {
+		rf.mu.RUnlock()
 		return
 	}
 	nextIndex := rf.nextIndex[i]
 	if nextIndex < rf.FirstLogIndex() {
-		rf.replicaByIS(i)
+		args := &InstallSnapshotArgs{
+			Term:              rf.currentTerm,
+			LeaderId:          rf.me,
+			LastIncludedIndex: rf.PrevLogIndex(),
+			LastIncludedTerm:  rf.PrevLogTerm(),
+			Data:              rf.persister.ReadSnapshot(),
+		}
+		rf.mu.RUnlock()
+		rf.replicaByIS(i, args)
 	} else {
-		rf.replicaByAE(i, nextIndex)
+		args := &AppendEntriesArgs{
+			Term:         rf.currentTerm,
+			LeaderId:     rf.me,
+			PrevLogIndex: nextIndex - 1,
+			PrevLogTerm:  rf.GetLogTerm(nextIndex - 1),
+			Entries:      rf.CopyLogFrom(nextIndex),
+			LeaderCommit: rf.commitIndex,
+		}
+		rf.mu.RUnlock()
+		rf.replicaByAE(i, args, nextIndex)
 	}
 }
 
@@ -675,8 +699,8 @@ func (rf *Raft) commiter() {
 		entries := rf.GetLogSlice(startIndex, commitIndex+1)
 
 		rf.mu.Unlock()
-		rf.slog("commit log[%d-%d]\n", startIndex, startIndex+len(entries))
 		for i, entry := range entries {
+			// rf.slog("commit log[%d] %d\n", startIndex+i, entry.Command)
 			rf.applyCh <- ApplyMsg{CommandValid: true, Command: entry.Command, CommandIndex: startIndex + i}
 		}
 		rf.mu.Lock()
@@ -709,7 +733,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Term:    rf.currentTerm,
 		Command: command,
 	})
-	rf.slog("Start log %d = %d\n", rf.LastLogIndex(), command)
+	// rf.slog("Start log %d = %d\n", rf.LastLogIndex(), command)
 	rf.persist()
 	rf.sendAppendEntriesAll()
 	return rf.LastLogIndex(), rf.currentTerm, true
@@ -738,7 +762,7 @@ func (rf *Raft) startElection() {
 	if rf.killed() {
 		return
 	}
-	rf.slog("start election for %d\n", rf.currentTerm+1)
+	// rf.slog("start election for %d\n", rf.currentTerm+1)
 	rf.mu.Lock()
 	rf.currentTerm++
 	rf.votedFor = rf.me
@@ -766,7 +790,7 @@ func (rf *Raft) startElection() {
 						voteCount++
 						if voteCount > len(rf.peers)/2 {
 							rf.SwitchState(Leader)
-							rf.slog("become leader\n")
+							// rf.slog("become leader\n")
 							rf.nextIndex = make([]int, len(rf.peers))
 							rf.matchIndex = make([]int, len(rf.peers))
 							for i := range rf.nextIndex {
@@ -780,7 +804,7 @@ func (rf *Raft) startElection() {
 							}()
 						}
 					} else if reply.Term > rf.currentTerm {
-						rf.slog("change to follower because receive RV reply from %d[%d], term %d -> %d\n", server, args.Term, rf.currentTerm, args.Term)
+						// rf.slog("change to follower because receive RV reply from %d[%d], term %d -> %d\n", server, args.Term, rf.currentTerm, args.Term)
 						rf.SwitchTerm(reply.Term)
 						rf.SwitchState(Follower)
 						rf.persist()
@@ -855,7 +879,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-	rf.slog("remake\n")
+	// rf.slog("remake\n")
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
