@@ -435,6 +435,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	rf.votedFor = args.CandidateId
 	rf.persist()
+	rf.electionTimer.Reset(makeTimeout())
 	rf.debug("receive RV with idx %d term %d from %d[%d]...grant\n", args.LastLogIndex, args.LastLogTerm, args.CandidateId, args.Term)
 
 	reply.VoteGranted = true
