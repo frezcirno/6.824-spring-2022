@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,12 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 		log.Printf(format, a...)
 	}
 	return
+}
+
+func assert(cond bool) {
+	if Debug && !cond {
+		panic("bug")
+	}
 }
 
 const ExecuteTimeout = 500 * time.Millisecond
@@ -179,6 +186,7 @@ func (kv *KVServer) execute(op *Command) *CommandResult {
 func (kv *KVServer) applier() {
 	for !kv.killed() {
 		msg := <-kv.applyCh
+		assert(msg.CommandValid || msg.SnapshotValid)
 		if msg.CommandValid {
 			kv.mu.Lock()
 			cmd := msg.Command.(Command)
@@ -195,8 +203,49 @@ func (kv *KVServer) applier() {
 				notifyCh := kv.getNotifyCh(msg.CommandIndex)
 				notifyCh <- cmdRes
 			}
+
+			if needSnapshot, snapshot := kv.needSnapshot(); needSnapshot {
+				kv.rf.Snapshot(msg.CommandIndex, snapshot)
+			}
+
+			kv.mu.Unlock()
+		} else {
+			kv.mu.Lock()
+			if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
+				kv.loadSnapshot(msg.Snapshot)
+			}
 			kv.mu.Unlock()
 		}
+	}
+}
+
+func (kv *KVServer) needSnapshot() (bool, []byte) {
+	ok := kv.maxraftstate != -1 && kv.rf.RaftStateSize() > kv.maxraftstate
+	var snapshot []byte
+	if ok {
+		w := new(bytes.Buffer)
+		e := labgob.NewEncoder(w)
+		e.Encode(kv.m)
+		e.Encode(kv.lastCmd)
+		snapshot = w.Bytes()
+	}
+	return ok, snapshot
+}
+
+func (kv *KVServer) loadSnapshot(snapshot []byte) {
+	if snapshot == nil || len(snapshot) < 1 {
+		return
+	}
+
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	var m map[string]string
+	var lastCmd map[int64]LastCommandRes
+	if d.Decode(&m) != nil || d.Decode(&lastCmd) != nil {
+		log.Fatal("decode snapshot error")
+	} else {
+		kv.m = m
+		kv.lastCmd = lastCmd
 	}
 }
 
@@ -229,6 +278,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+
+	kv.loadSnapshot(persister.ReadSnapshot())
 
 	// You may need initialization code here.
 	go kv.applier()

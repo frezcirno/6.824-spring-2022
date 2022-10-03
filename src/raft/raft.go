@@ -247,6 +247,10 @@ func (rf *Raft) persistWithSnapshot(snapshot []byte) {
 	rf.persister.SaveStateAndSnapshot(rf.serialize(), snapshot)
 }
 
+func (rf *Raft) RaftStateSize() int {
+	return rf.persister.RaftStateSize()
+}
+
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
