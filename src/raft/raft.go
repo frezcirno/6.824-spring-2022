@@ -639,9 +639,17 @@ func topK(nums []int, k int) int {
 func (rf *Raft) updateCommitIndex() {
 	commitIndex := topK(rf.matchIndex, (len(rf.peers)-1)/2)
 	if commitIndex > rf.commitIndex {
-		rf.commitIndex = commitIndex
-		rf.debug("update commitIndex to %d\n", rf.commitIndex)
-		rf.commitCond.Signal()
+		// Raft Paper's Figure 8
+		// Raft never commits log entries from previous terms by counting
+		// replicas. Only log entries from the leader’s current term are
+		// committed by counting replicas; once an entry from the current term
+		// has been committed in this way, then all prior entries are
+		// committed indirectly because of the Log Matching Property.
+		if rf.getLogTerm(commitIndex) == rf.currentTerm {
+			rf.commitIndex = commitIndex
+			rf.debug("update commitIndex to %d\n", rf.commitIndex)
+			rf.commitCond.Signal()
+		}
 	}
 }
 
